@@ -473,3 +473,4 @@ class ParserStringToDIMACS:
             file = open("problem.cnf", "w+")
             file.write(old_cnf[:8] + str(number_of_clauses) + old_cnf[9:] + "\n" + extension_clause)
             file.close()
+            """TESt"""
