@@ -427,21 +427,26 @@ class ParserStringToDIMACS:
     def get_all_models(formula, stabalize):
         """ Erzeugt eine Textdatei "allmodels" für eine gegebene Formel f, die alle Modelle von f enthält. Dabei wird
         beginnend mit f jeweils ein Modell M (And(m1,...mn)) gesucht. Im nächsten Schritt wird aus f und der Negation
-        von M eine neue Formel f' gebildet. Diese Schritte werden wiederholt, bis kein Modell mehr gefunden wird.
+        von M eine neue Formel f' gebildet. f' = And(f, Not(M)). Da f im Dimacs Format verwendet wird, entsteht f',
+        indem f eine neue Zeile (Klausel) Not(M) durch Anwendung von de Morgan hinzugefügt wird.
+         Diese Schritte werden wiederholt, bis kein Modell mehr gefunden wird.
 
                                       :param formula: String
                                       :param stabalize:
 
                                       :return: DIMACS-String
         """
-
+        # True, bis kein Modell mehr gefunden wird
         sat = True
+        # erstelle Ausgabefile für die Modelle
         allmodels = open("allmodels", "w+")
+        # wandle die Eingabeformel in KNF um
         cnf = ParserStringToDIMACS.convert_formula_to_dimacs(formula, stabalize)
         file = open("problem.cnf", "w+")
         file.write(cnf)
         file.close()
         while sat:
+            # finde ein Modell für die Formel
             subprocess.run(["minisat", "problem.cnf", "problem.model"])
             modelfile = open("problem.model", "r")
             result = modelfile.read()
@@ -451,7 +456,9 @@ class ParserStringToDIMACS:
                 allmodels.close()
                 break
             newmodel = result[4:]
+            # Füge das Modell dem Ausgabefile hinzu
             allmodels.write(newmodel)
+            # bilde eine neue Klausel für das neue Modell
             extension_clause = ""
             for i in range(0, len(newmodel)):
                 if newmodel[i] == "\n" or newmodel[i] == " " or newmodel[i] == "0":
@@ -459,6 +466,8 @@ class ParserStringToDIMACS:
                 elif newmodel[i] == "-":
                     continue
                 else:
+                    # füge jeweils die Negation des Eintrags der neuen Klausel hinzu
+                    #(de Morgan)
                     if i > 0:
                         if newmodel[i - 1] == "-":
                             extension_clause += newmodel[i]
@@ -469,8 +478,141 @@ class ParserStringToDIMACS:
             file = open("problem.cnf", "r")
             old_cnf = file.read()
             file.close()
+            #füge die neue Klausel für das gefundene Modell dem Problemfile hinzu
             number_of_clauses = int(old_cnf[8]) + 1
             file = open("problem.cnf", "w+")
             file.write(old_cnf[:8] + str(number_of_clauses) + old_cnf[9:] + "\n" + extension_clause)
             file.close()
-            """TESt"""
+
+        @staticmethod
+        def create_clarks_completion(formula_term):
+            """ Erzeugt die Clarks Completion für ein gegebenes Programm (Konjunktion von Implikationen). Die Rückgabe
+                ist eine Konjunktion von Biimplikationen
+
+
+                                                  :param formula: String, das Programm
+
+                                                  :return: Term: Konjunktion von Biimpikationen
+            """
+            # Liste aller Biimplikationen, die Clarks Completion konstituieren
+            clarks_biimplications = []
+            # erzeuge Liste aller Atome, die im Kopf einer Regel vorkommen
+            header_atoms = ParserStringToDIMACS.find_header_atoms(formula_term)
+            # finde für jedes Atom aus header_atoms die zugehörigen Regeln und bilde die entsprechende Biimplikation
+            for header_atom in header_atoms:
+                rules_for_header = ParserStringToDIMACS.find_rules_for_header_atom(header_atom, formula_term)
+                clarks_biimplication = ParserStringToDIMACS.create_clarks_biimplication(header_atom, rules_for_header)
+                clarks_biimplications.append(clarks_biimplication)
+            # Jetzt müssen noch die Biimplikationen für alle Atome p, die nicht im Kopf einer Regel vorkommen, gebildet
+            # werden (Biimpl(p,BOT))
+            all_atoms = []
+            # finde alle Atome des Programmes
+            ParserStringToDIMACS.collect_atoms(all_atoms, formula_term)
+            # erzeuge Liste aller Atome, die nicht im Kopf einer Regel vorkommen
+            non_header_atoms = []
+            for a in all_atoms:
+                if not a.is_in(header_atoms) and a.operator != "TOP" and a.operator != "BOT":
+                    non_header_atoms.append(a)
+            # Bilde Biimplikation Biimpl(p, BOT)
+            for non_header_atom in non_header_atoms:
+                clarks_biimplications.append(Term('BiImpl', [non_header_atom, Term('BOT', [])]))
+            if len(clarks_biimplications) == 0:
+                return formula_term
+            if len(clarks_biimplications) == 1:
+                return clarks_biimplications[0]
+            # Bilde Konjunktion
+            result = Term('And', [clarks_biimplications[0], clarks_biimplications[1]])
+            for i in range(2, len(clarks_biimplications)):
+                result = Term('And', [result, clarks_biimplications[i]])
+            return result
+
+    @staticmethod
+    def find_header_atoms(formula_term):  # returns array of atoms as string
+        """ Findet alle Atome innerhalb eines Programmes, die nicht im Kopf einer Regel vorkommen. Die Rückgabe
+            liefert eine Liste von Strings
+
+                                                          :param formula_term: Term, das Programm
+
+                                                          :return: Liste von Strings
+        """
+        if formula_term.operator == 'Impl':
+            if formula_term.parameters[1].operator == 'Not':
+                raise Exception('The header of a rule must be a variable')
+            return [formula_term.parameters[1]]
+        result = []
+        # wir treffen die Annahme, dass die Formel eine Konjunktion ist, falls sie keine Implikation ist
+        header_atoms_0 = ParserStringToDIMACS.find_header_atoms(formula_term.parameters[0])
+        header_atoms_1 = ParserStringToDIMACS.find_header_atoms(formula_term.parameters[1])
+
+        for header_atom in header_atoms_0:
+            if not header_atom.is_in(result):
+                result.append(header_atom)
+        for header_atom in header_atoms_1:
+            if not header_atom.is_in(result):
+                result.append(header_atom)
+        return result
+
+    @staticmethod
+    def find_rules_for_header_atom(header_atom_term, formula_term):  # return array of formulas
+        """ Liefert alle Körper der Regeln eines Programmes, die das Atom header_atom_term als Kopf haben.
+
+
+                                                          :param header_atom_term: Term, das Atom
+                                                          :param formula_term: Term, das Programm
+
+
+                                                          :return: Liste aller Terme, die header_atom als Kopf haben
+        """
+
+        if formula_term.operator == 'Impl':
+            if formula_term.parameters[1].operator == header_atom_term.operator:
+                return [formula_term.parameters[0]]
+            else:
+                return []
+        result = []
+        # wir treffen die Annahme, dass die Formel eine Konjunktion ist, falls sie keine Implikation ist
+        result.extend(ParserStringToDIMACS.find_rules_for_header_atom(header_atom_term, formula_term.parameters[0]))
+        result.extend(ParserStringToDIMACS.find_rules_for_header_atom(header_atom_term, formula_term.parameters[1]))
+        return result
+
+    @staticmethod
+    def create_clarks_biimplication(header_atom, rules_for_header):
+        """ Erzeugt für ein Atom und seine dazugehörigen Bodies eine Clarks Completion Biimplikation, also eine
+        Biimplikation von der Veroderung aller Bodies und dem Atom
+
+
+                                                                  :param header_atom: String, das Atom
+                                                                  :param  rules_for_header Liste von Termen
+
+
+                                                                  :return: Term: Biimplikation
+        """
+        # für jedes header-atom muss es mindestens einen Body geben
+        disjunction_of_rules = rules_for_header[0]
+        for i in range(1, len(rules_for_header)):
+            disjunction_of_rules = Term('Or', [disjunction_of_rules, rules_for_header[i]])
+        result = Term('BiImpl', [disjunction_of_rules, header_atom])
+        return result
+
+    @staticmethod
+    def collect_atoms(result, term):
+        """ Die Rückgabe liefert eine Liste aller Atome eines Terms
+
+
+                                                                          :param term, Objekt der Klasse Term
+                                                                          :param  result Liste von Termen
+
+
+                                                                          :return: Liste von Termen
+                """
+        # Term mit 0-stelligem Parametern ist ein Atom
+        if term.parameters is None or term.parameters == 0 or len(term.parameters) == 0:
+            if not term.is_in(result):
+                result.append(term)
+        # einstellige Paramter -> Not-Term
+        elif len(term.parameters) == 1:
+            Parser.collect_atoms(result, term.parameters[0])
+        # alle anderen Terme
+        elif len(term.parameters) == 2:
+            Parser.collect_atoms(result, term.parameters[0])
+            Parser.collect_atoms(result, term.parameters[1])
