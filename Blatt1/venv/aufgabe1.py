@@ -18,6 +18,12 @@ class Term:
         self.parameters = parameters
         self.operator = operator
 
+    def is_in(self, list_of_terms):
+        for t in list_of_terms:
+            if TermComparator.get_instance().terms_are_equal(t, self):
+                return True
+        return False
+
 
 class ParserStringToDIMACS:
 
@@ -598,13 +604,10 @@ class ParserStringToDIMACS:
     def collect_atoms(result, term):
         """ Die Rückgabe liefert eine Liste aller Atome eines Terms
 
-
-                                                                          :param term, Objekt der Klasse Term
-                                                                          :param  result Liste von Termen
-
-
-                                                                          :return: Liste von Termen
-                """
+            :param  result Liste von Termen
+            :return: Liste von Termen
+            
+        """
         # Term mit 0-stelligem Parametern ist ein Atom
         if term.parameters is None or term.parameters == 0 or len(term.parameters) == 0:
             if not term.is_in(result):
